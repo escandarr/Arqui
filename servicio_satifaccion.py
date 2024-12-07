@@ -2,93 +2,93 @@ import socket
 import sys
 import sqlite3
 import json
-from datetime import datetime
 
-# Crear un socket TCP/IP
+BUS_HOST = 'localhost'
+BUS_PORT = 5000
+
+# Conexión al bus
+print('[SERVICIO] Conectando al bus...')
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.connect((BUS_HOST, BUS_PORT))
+print('[SERVICIO] Conectado al bus.')
 
-# Conectar el socket al puerto donde el bus está escuchando
-bus_address = ('localhost', 5000)
-print(f'Conectando a {bus_address[0]} en el puerto {bus_address[1]}')
-sock.connect(bus_address)
-
-# Conectar a la base de datos SQLite
+# Conexión a la base de datos
 conn = sqlite3.connect('database.db')
 cursor = conn.cursor()
+print('[SERVICIO] Conectado a la BD.')
+
+# Crear la tabla evaluaciones si no existe
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS evaluaciones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        consulta_id INTEGER NOT NULL,
+        calificacion INTEGER NOT NULL,
+        comentarios TEXT NOT NULL,
+        fecha_evaluacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+''')
+conn.commit()
 
 try:
-    # Enviar datos de inicio para el servicio de reporte de satisfacción
-    message = b'00013sinitreport'
-    print(f'Enviando: {message}')
-    sock.sendall(message)
-    sinit = 1
+    # Registrar el servicio ante el bus
+    init_message = b'00010sinitrpts1'
+    print('[SERVICIO] Enviando mensaje de inicio:', init_message)
+    sock.sendall(init_message)
+    sinit = True
 
     while True:
-        # Esperar la transacción
-        print("Esperando transacción...")
+        print('[SERVICIO] Esperando tamaño del siguiente mensaje...')
         size_data = sock.recv(5)
         if not size_data:
+            print('[SERVICIO] No se recibió tamaño, cerrando...')
             break
-        amount_expected = int(size_data)
 
+        amount_expected = int(size_data)
         data = b""
         amount_received = 0
         while amount_received < amount_expected:
             chunk = sock.recv(amount_expected - amount_received)
             if not chunk:
+                print('[SERVICIO] No se recibió más data. Cerrando...')
                 break
             amount_received += len(chunk)
             data += chunk
 
-        if sinit == 1:
-            # Respuesta a la inicialización
-            sinit = 0
-            print('Respuesta de sinit recibida')
+        if sinit:
+            # Primer mensaje es la respuesta a sinit
+            sinit = False
+            print('[SERVICIO] Respuesta a sinit recibida. Listo para procesar.')
             continue
 
-        # Analizar el comando recibido
-        comando = data[:10].decode()
-        contenido = data[10:]
+        # Verificar si el mensaje es para este servicio
+        if data[:5].decode() == 'rpts1':
+            # Mensaje para este servicio
+            comando = data[:10].decode()  # ej: rpts1repsa
+            contenido = data[10:].decode()
+            print('[SERVICIO] Comando recibido:', comando)
+            print('[SERVICIO] Contenido:', contenido)
 
-        if comando == "repsatisfa":
-            # Formato esperado (flexible): repsatisfaYYYY-MM-DD|YYYY-MM-DD
-            # Si fechas vacías => mostrar todos los reportes
-            # Si fecha_inicio vacía => hasta fecha_fin
-            # Si fecha_fin vacía => desde fecha_inicio
-            try:
-                datos_str = contenido.decode()
-                # Podría ser ""|"", "2023-01-01"|"" o ""|"2023-12-31" o ambas fechas
-                fecha_inicio_str, fecha_fin_str = datos_str.split('|')
+            if comando == "rpts1repsa":
+                fecha_inicio_str, fecha_fin_str = contenido.split('|')
 
                 query = "SELECT id, consulta_id, calificacion, comentarios, fecha_evaluacion FROM evaluaciones"
                 params = []
-
-                # Construir dinámica la consulta según las fechas
                 if fecha_inicio_str and fecha_fin_str:
-                    # Ambas fechas presentes
                     query += " WHERE DATE(fecha_evaluacion) BETWEEN DATE(?) AND DATE(?)"
                     params = [fecha_inicio_str, fecha_fin_str]
                 elif fecha_inicio_str and not fecha_fin_str:
-                    # Solo fecha de inicio
                     query += " WHERE DATE(fecha_evaluacion) >= DATE(?)"
                     params = [fecha_inicio_str]
                 elif not fecha_inicio_str and fecha_fin_str:
-                    # Solo fecha de fin
                     query += " WHERE DATE(fecha_evaluacion) <= DATE(?)"
                     params = [fecha_fin_str]
-                # Si ambas están vacías, no se agrega WHERE (trae todo)
 
+                print('[SERVICIO] Ejecutando consulta...')
                 cursor.execute(query, params)
                 rows = cursor.fetchall()
 
-                # Calcular estadísticas
                 total = len(rows)
-                if total > 0:
-                    promedio = sum([r[2] for r in rows]) / total
-                else:
-                    promedio = 0
-
-                # Armar estructura JSON
+                promedio = sum([r[2] for r in rows]) / total if total > 0 else 0
                 evaluaciones_json = []
                 for r in rows:
                     evaluaciones_json.append({
@@ -104,24 +104,22 @@ try:
                     "promedio_calificacion": promedio,
                     "evaluaciones": evaluaciones_json
                 }
+
                 respuesta_json = json.dumps(reporte)
+                # Respuesta también con prefijo rpts1 para que el bus sepa reenviarla al cliente
+                # Usamos el comando "rpts1respj" (10 chars) para indicar respuesta JSON
+                response_command = "rpts1respj"
+                full_response = response_command + respuesta_json
+                message = f"{len(full_response):05d}{full_response}".encode()
 
-                # Enviar la respuesta
-                message = f"{len(respuesta_json):05d}{respuesta_json}".encode()
-                print(f'Enviando reporte: {respuesta_json}')
+                print('[SERVICIO] Enviando reporte JSON:', respuesta_json)
                 sock.sendall(message)
-
-            except Exception as e:
-                print(f"Error procesando repsatisfa: {e}")
-                respuesta = "repsatisfaERROR"
-                message = f'{len(respuesta):05d}{respuesta}'.encode()
-                sock.sendall(message)
+            else:
+                print('[SERVICIO] Comando no reconocido.')
         else:
-            # No es para este servicio
-            print("Solicitud no perteneciente a este servicio.")
-            print(data)
+            print('[SERVICIO] Mensaje no pertenece a este servicio.')
 
 finally:
-    print('Cerrando el socket del servicio de reporte...')
+    print('[SERVICIO] Cerrando...')
     conn.close()
     sock.close()

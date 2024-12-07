@@ -1,31 +1,28 @@
 import socket
 
-# Datos para solicitar el reporte
-fecha_inicio = input("Ingrese la fecha de inicio (YYYY-MM-DD) o deje en blanco para no filtrar por inicio: ").strip()
-fecha_fin = input("Ingrese la fecha de fin (YYYY-MM-DD) o deje en blanco para no filtrar por fin: ").strip()
+BUS_HOST = 'localhost'
+BUS_PORT = 5000
 
-comando = "repsatisfa"
+fecha_inicio = input("Ingrese la fecha de inicio (YYYY-MM-DD) o deje en blanco: ").strip()
+fecha_fin = input("Ingrese la fecha de fin (YYYY-MM-DD) o deje en blanco: ").strip()
+
+comando = "rpts1repsa"  # 10 caracteres
 payload = f"{fecha_inicio}|{fecha_fin}"
 mensaje = comando + payload
 
-# Calculamos la longitud
 longitud = len(mensaje)
 cabecera = f"{longitud:05d}"
-
-# Mensaje final a enviar
 message = (cabecera + mensaje).encode()
 
-# Crear socket para el cliente
+print("[CLIENTE] Conectando al bus...")
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-bus_address = ('localhost', 5000)
-print(f'Conectando a {bus_address}')
-sock.connect(bus_address)
+sock.connect((BUS_HOST, BUS_PORT))
+print("[CLIENTE] Conexión establecida con el bus.")
 
 try:
-    print(f'Enviando solicitud de reporte: {mensaje}')
+    print("[CLIENTE] Enviando solicitud:", mensaje)
     sock.sendall(message)
 
-    # Recibir respuesta del servicio
     size_data = sock.recv(5)
     if size_data:
         amount_expected = int(size_data)
@@ -39,8 +36,17 @@ try:
             data += chunk
 
         respuesta = data.decode()
-        print("Reporte recibido (JSON):")
-        print(respuesta) 
+        # Respuesta tendrá el formato: rpts1respj{JSON}
+        # Los primeros 10 caracteres son 'rpts1respj', el resto es el JSON
+        if respuesta.startswith("rpts1respj"):
+            json_response = respuesta[10:]
+            print("[CLIENTE] Reporte recibido (JSON):")
+            print(json_response)
+        else:
+            print("[CLIENTE] Respuesta con formato inesperado:", respuesta)
+    else:
+        print("[CLIENTE] No se recibió respuesta del servicio.")
+
 finally:
-    print('Cerrando el socket del cliente...')
+    print("[CLIENTE] Cerrando conexión...")
     sock.close()
