@@ -227,7 +227,7 @@ try:
 
         elif seleccion == '1':
             email = input('Enter email: ')
-            password = input('Enter password: ')
+            password = input('Enter password(no la secreta): ')
             datos = f"{email}|{password}"
             mensaje = f"{len(datos) + 10:05}auth1logus".encode() + datos.encode()  # auth1logus + datos
             print('sending {!r}'.format(mensaje))
