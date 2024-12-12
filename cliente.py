@@ -25,7 +25,7 @@ def validar_entrada(entrada, tipo):
 #########################SERVICIO DE CASOS#########################################
 
 def casos_cliente(id_usuario, nombre_usuario):
-    print("Bienvenido al sistema de casos de Easy Lawyer señor ", nombre_usuario)
+    print("Bienvenido: ", nombre_usuario)
     etiqueta = input('Entre etiqueta del caso: ')
     etiqueta = validar_entrada(etiqueta, "etiqueta")
 
